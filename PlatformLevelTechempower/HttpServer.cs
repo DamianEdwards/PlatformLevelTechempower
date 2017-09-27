@@ -291,6 +291,7 @@ namespace PlatformLevelTechempower
 
             var body = JsonSerializer.Serialize(value);
 
+            // PERF: Need faster way to convert int to ASCII string bytes
             WriteHeader(output, _headerContentLength, Encoding.ASCII.GetBytes(body.Length.ToString()));
 
             output.Write(_crlf);
