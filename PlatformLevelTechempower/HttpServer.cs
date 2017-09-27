@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Hosting.Internal;
@@ -10,22 +12,22 @@ using Microsoft.AspNetCore.Server.Kestrel.Transport.Libuv;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Utf8Json;
 
 namespace PlatformLevelTechempower
 {
-    public class PlainTextRawApplication : IConnectionHandler, IServerApplication
+    public class HttpServer : IConnectionHandler
     {
-        private static readonly byte[] _crlf = Encoding.UTF8.GetBytes("\r\n");
-        private static readonly byte[] _http11OK = Encoding.UTF8.GetBytes("HTTP/1.1 200 OK\r\n");
-        private static readonly byte[] _headerServer = Encoding.UTF8.GetBytes("Server: Custom");
-        private static readonly byte[] _headerDate = Encoding.UTF8.GetBytes("Date: ");
-        private static readonly byte[] _headerContentLength = Encoding.UTF8.GetBytes("Content-Length: ");
-        private static readonly byte[] _headerContentTypeText = Encoding.UTF8.GetBytes("Content-Type: text/plain");
-        private static readonly byte[] _headerContentTypeJson = Encoding.UTF8.GetBytes("Content-Type: application/json");
-        
-        private static readonly DateHeaderValueManager _dateHeaderValueManager = new DateHeaderValueManager();
+        private static readonly byte[] _headerConnection = Encoding.ASCII.GetBytes("Connection");
+        private static readonly byte[] _headerConnectionKeepAlive = Encoding.ASCII.GetBytes("keep-alive");
+        //private static readonly byte[] _cheatersResponse = Encoding.UTF8.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 13\r\nContent-Type: text/plain\r\n\r\nHello, World!");
 
-        private static readonly byte[] _plainTextBody = Encoding.UTF8.GetBytes("Hello, World!");
+        private readonly Handler _handler;
+
+        public HttpServer(Handler handler)
+        {
+            _handler = handler;
+        }
 
         public async Task RunAsync(int port)
         {
@@ -44,7 +46,7 @@ namespace PlatformLevelTechempower
             var transport = libuvTransport.Create(binding, this);
             await transport.BindAsync();
 
-            Console.WriteLine($"Server (raw) listening on http://localhost:{port}");
+            Console.WriteLine($"Server listening on http://localhost:{port}");
 
             lifetime.ApplicationStopping.WaitHandle.WaitOne();
 
@@ -52,12 +54,12 @@ namespace PlatformLevelTechempower
             await transport.StopAsync();
         }
 
-        public IConnectionContext OnConnection(IConnectionInformation connectionInfo)
+        IConnectionContext IConnectionHandler.OnConnection(IConnectionInformation connectionInfo)
         {
             var inputOptions = new PipeOptions { WriterScheduler = connectionInfo.InputWriterScheduler };
             var outputOptions = new PipeOptions { ReaderScheduler = connectionInfo.OutputReaderScheduler };
 
-            var context = new HttpConnectionContext
+            var context = new HttpConnectionContext(_handler)
             {
                 ConnectionId = Guid.NewGuid().ToString(),
                 Input = connectionInfo.PipeFactory.Create(inputOptions),
@@ -69,19 +71,21 @@ namespace PlatformLevelTechempower
             return context;
         }
 
-        private static class Paths
-        {
-            public static readonly byte[] Plaintext = Encoding.ASCII.GetBytes("/plaintext");
-            public static readonly byte[] Json = Encoding.ASCII.GetBytes("/json");
-        }
-
         private class HttpConnectionContext : IConnectionContext, IHttpHeadersHandler, IHttpRequestLineHandler
         {
+            private readonly Handler _handler;
+
             private State _state;
 
             private HttpMethod _method;
             private byte[] _path;
-            private Span<byte> _pathSpan;
+            private byte[] _query;
+            private bool _keepAlive;
+
+            public HttpConnectionContext(Handler handler)
+            {
+                _handler = handler;
+            }
 
             public string ConnectionId { get; set; }
 
@@ -134,44 +138,8 @@ namespace PlatformLevelTechempower
                             if (_state == State.Body)
                             {
                                 var outputBuffer = Output.Writer.Alloc();
-                                
-                                if (_method == HttpMethod.Get)
-                                {
-                                    var path = new Span<byte>(_path);
-                                    if (path.StartsWith(Paths.Plaintext))
-                                    {
-                                        Ok(outputBuffer);
-                                        WriteCommonHeaders(outputBuffer);
 
-                                        outputBuffer.Write(_headerContentTypeText);
-                                        outputBuffer.Write(_crlf);
-
-                                        outputBuffer.Write(_plainTextBody);
-                                    }
-                                    else if (path.StartsWith(Paths.Json))
-                                    {
-                                        Ok(outputBuffer);
-                                        WriteCommonHeaders(outputBuffer);
-
-                                        outputBuffer.Write(_headerContentTypeJson);
-                                        outputBuffer.Write(_crlf);
-
-                                        var jsonPayload = Encoding.UTF8.GetBytes(Jil.JSON.Serialize(new { message = "Hello, World!" }));
-                                        outputBuffer.Write(jsonPayload);
-                                    }
-                                    else
-                                    {
-                                        Ok(outputBuffer);
-                                        WriteCommonHeaders(outputBuffer);
-
-
-                                    }
-                                }
-                                else
-                                {
-                                    Ok(outputBuffer);
-                                    WriteCommonHeaders(outputBuffer);
-                                }
+                                var status = await _handler.ProcessAsync(_method, _path, _query, _keepAlive, outputBuffer);
 
                                 await outputBuffer.FlushAsync();
 
@@ -194,24 +162,6 @@ namespace PlatformLevelTechempower
                 {
                     Output.Writer.Complete();
                 }
-            }
-
-            private static void Ok(WritableBuffer outputBuffer)
-            {
-                // HTTP 1.1 OK
-                outputBuffer.Write(_http11OK);
-            }
-
-            private static void WriteCommonHeaders(WritableBuffer outputBuffer)
-            {
-                // Server headers
-                outputBuffer.Write(_headerServer);
-                outputBuffer.Write(_crlf);
-
-                // Date header
-                outputBuffer.Write(_headerDate);
-                outputBuffer.Write(_dateHeaderValueManager.GetDateHeaderValues().Bytes);
-                outputBuffer.Write(_crlf);
             }
 
             private void ParseHttpRequest(HttpParser<HttpConnectionContext> parser, ReadableBuffer inputBuffer, out ReadCursor consumed, out ReadCursor examined)
@@ -240,12 +190,18 @@ namespace PlatformLevelTechempower
             public void OnStartLine(HttpMethod method, HttpVersion version, Span<byte> target, Span<byte> path, Span<byte> query, Span<byte> customMethod, bool pathEncoded)
             {
                 _method = method;
-                _pathSpan = path;
                 _path = path.ToArray();
+                _query = query.ToArray();
             }
 
             public void OnHeader(Span<byte> name, Span<byte> value)
             {
+                if (name.SequenceEqual(_headerConnection) && value.SequenceEqual(_headerConnectionKeepAlive))
+                {
+                    _keepAlive = true;
+                }
+
+                _handler.OnHeader(name, value);
             }
 
             private enum State
@@ -255,7 +211,6 @@ namespace PlatformLevelTechempower
                 Body
             }
         }
-
 
         public class IPEndPointInformation : IEndPointInformation
         {
@@ -281,5 +236,153 @@ namespace PlatformLevelTechempower
                 return IPEndPoint?.ToString();
             }
         }
+    }
+
+    public abstract class Handler
+    {
+        private static readonly byte[] _crlf = Encoding.ASCII.GetBytes("\r\n");
+        private static readonly byte[] _http11StartLine = Encoding.ASCII.GetBytes("HTTP/1.1 ");
+
+        private static readonly byte[] _headerServer = Encoding.ASCII.GetBytes("Server: Custom");
+        private static readonly byte[] _headerDate = Encoding.ASCII.GetBytes("Date: ");
+        private static readonly byte[] _headerContentLength = Encoding.ASCII.GetBytes("Content-Length: ");
+        private static readonly byte[] _headerContentType = Encoding.ASCII.GetBytes("Content-Type: ");
+        private static readonly byte[] _headerContentLengthZero = Encoding.ASCII.GetBytes("0");
+        private static readonly byte[] _headerConnectionKeepAlive = Encoding.ASCII.GetBytes("Connection: keep-alive");
+
+        private static readonly DateHeaderValueManager _dateHeaderValueManager = new DateHeaderValueManager();
+
+        public virtual void OnHeader(Span<byte> name, Span<byte> value)
+        {
+
+        }
+
+        public abstract Task<HttpStatus> ProcessAsync(HttpMethod method, byte[] path, byte[] query, bool keepAlive, WritableBuffer output);
+
+        public bool PathMatch(byte[] path, byte[] target)
+        {
+            var pathSpan = new Span<byte>(path);
+
+            return pathSpan.SequenceEqual(target);
+        }
+
+        public HttpStatus Ok(WritableBuffer output, bool keepAlive, byte[] body, MediaType mediaType)
+        {
+            WriteStartLine(output, HttpStatus.Ok);
+
+            WriteCommonHeaders(output, keepAlive);
+
+            WriteHeader(output, _headerContentType, mediaType.Value);
+            WriteHeader(output, _headerContentLength, Encoding.ASCII.GetBytes(body.Length.ToString()));
+
+            output.Write(_crlf);
+            output.Write(body);
+
+            return HttpStatus.Ok;
+        }
+
+        public HttpStatus Json<T>(WritableBuffer output, bool keepAlive, T value)
+        {
+            WriteStartLine(output, HttpStatus.Ok);
+
+            WriteCommonHeaders(output, keepAlive);
+
+            WriteHeader(output, _headerContentType, MediaType.ApplicationJson.Value);
+
+            var body = JsonSerializer.Serialize(value);
+
+            WriteHeader(output, _headerContentLength, Encoding.ASCII.GetBytes(body.Length.ToString()));
+
+            output.Write(_crlf);
+            output.Write(body);
+
+            return HttpStatus.Ok;
+        }
+
+        public HttpStatus NotFound(WritableBuffer output, bool keepAlive)
+        {
+            return WriteResponse(output, keepAlive, HttpStatus.NotFound);
+        }
+
+        public HttpStatus BadRequest(WritableBuffer output, bool keepAlive)
+        {
+            return WriteResponse(output, keepAlive, HttpStatus.BadRequest);
+        }
+
+        public void WriteHeader(WritableBuffer output, byte[] name, byte[] value)
+        {
+            output.Write(name);
+            output.Write(value);
+            output.Write(_crlf);
+        }
+
+        private HttpStatus WriteResponse(WritableBuffer output, bool keepAlive, HttpStatus status)
+        {
+            WriteStartLine(output, status);
+
+            WriteCommonHeaders(output, keepAlive);
+
+            WriteHeader(output, _headerContentLength, _headerContentLengthZero);
+
+            output.Write(_crlf);
+
+            return status;
+        }
+
+        private static void WriteStartLine(WritableBuffer output, HttpStatus status)
+        {
+            output.Write(_http11StartLine);
+            output.Write(status.Value);
+            output.Write(_crlf);
+        }
+
+        private void WriteCommonHeaders(WritableBuffer output, bool keepAlive)
+        {
+            // Server headers
+            output.Write(_headerServer);
+
+            // Date header
+            output.Write(_dateHeaderValueManager.GetDateHeaderValues().Bytes);
+            output.Write(_crlf);
+
+            if (keepAlive)
+            {
+                output.Write(_headerConnectionKeepAlive);
+                output.Write(_crlf);
+            }
+        }
+    }
+
+    public struct HttpStatus
+    {
+        public static HttpStatus Ok = new HttpStatus(200, "OK");
+        public static HttpStatus BadRequest = new HttpStatus(400, "BAD REQUEST");
+        public static HttpStatus NotFound = new HttpStatus(404, "NOT FOUND");
+        // etc.
+
+        private readonly byte[] _value;
+
+        private HttpStatus(int code, string message)
+        {
+            _value = Encoding.ASCII.GetBytes(code.ToString() + " " + message);
+        }
+
+        public byte[] Value => _value;
+    }
+
+    public struct MediaType
+    {
+        public static MediaType TextPlain = new MediaType("text/plain");
+        public static MediaType ApplicationJson = new MediaType("application/json");
+        // etc.
+
+        private readonly byte[] _value;
+
+        private MediaType(string value)
+        {
+            _value = Encoding.ASCII.GetBytes(value);
+        }
+
+        public byte[] Value => _value;
     }
 }
