@@ -42,12 +42,12 @@ namespace PlatformLevelTechempower
                 lifetime,
                 NullLoggerFactory.Instance);
 
-            var binding = new IPEndPointInformation(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, port));
+            var binding = new IPEndPointInformation(new System.Net.IPEndPoint(System.Net.IPAddress.Any, port));
 
             var transport = libuvTransport.Create(binding, this);
             await transport.BindAsync();
 
-            Console.WriteLine($"Server listening on http://localhost:{port}");
+            Console.WriteLine($"Server listening on http://*:{port}");
 
             lifetime.ApplicationStopping.WaitHandle.WaitOne();
 
