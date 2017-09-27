@@ -13,6 +13,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Utf8Json;
+using Microsoft.Net.Http.Headers;
 
 namespace PlatformLevelTechempower
 {
@@ -261,9 +262,7 @@ namespace PlatformLevelTechempower
 
         public bool PathMatch(byte[] path, byte[] target)
         {
-            var pathSpan = new Span<byte>(path);
-
-            return pathSpan.SequenceEqual(target);
+            return path.SequenceEqual(target);
         }
 
         public HttpStatus Ok(WritableBuffer output, bool keepAlive, byte[] body, MediaType mediaType)
@@ -273,7 +272,7 @@ namespace PlatformLevelTechempower
             WriteCommonHeaders(output, keepAlive);
 
             WriteHeader(output, _headerContentType, mediaType.Value);
-            WriteHeader(output, _headerContentLength, Encoding.ASCII.GetBytes(body.Length.ToString()));
+            WriteHeader(output, _headerContentLength, Encoding.ASCII.GetBytes(HeaderUtilities.FormatNonNegativeInt64(body.Length)));
 
             output.Write(_crlf);
             output.Write(body);
@@ -292,7 +291,7 @@ namespace PlatformLevelTechempower
             var body = JsonSerializer.Serialize(value);
 
             // PERF: Need faster way to convert int to ASCII string bytes
-            WriteHeader(output, _headerContentLength, Encoding.ASCII.GetBytes(body.Length.ToString()));
+            WriteHeader(output, _headerContentLength, Encoding.ASCII.GetBytes(HeaderUtilities.FormatNonNegativeInt64(body.Length)));
 
             output.Write(_crlf);
             output.Write(body);
