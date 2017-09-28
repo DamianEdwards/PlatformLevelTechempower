@@ -21,7 +21,6 @@ namespace PlatformLevelTechempower
     {
         private static readonly byte[] _headerConnection = Encoding.ASCII.GetBytes("Connection");
         private static readonly byte[] _headerConnectionKeepAlive = Encoding.ASCII.GetBytes("keep-alive");
-        //private static readonly byte[] _cheatersResponse = Encoding.UTF8.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 13\r\nContent-Type: text/plain\r\n\r\nHello, World!");
 
         public static readonly int DefaultThreadCount = Environment.ProcessorCount;
 
@@ -33,7 +32,10 @@ namespace PlatformLevelTechempower
 
             Console.CancelKeyPress += (sender, e) => lifetime.StopApplication();
 
-            var libuvOptions = new LibuvTransportOptions();
+            var libuvOptions = new LibuvTransportOptions
+            {
+                ThreadCount = threadCount
+            };
 
             var libuvTransport = new LibuvTransportFactory(
                 Options.Create(libuvOptions),
@@ -70,21 +72,16 @@ namespace PlatformLevelTechempower
             return context;
         }
 
-        private class HttpConnectionContext<THandler> : IConnectionContext, IHttpHeadersHandler, IHttpRequestLineHandler
-            where THandler : Handler, new()
+        private class HttpConnectionContext<THandlerInner> : IConnectionContext, IHttpHeadersHandler, IHttpRequestLineHandler
+            where THandlerInner : Handler, new()
         {
             private readonly Handler _handler;
 
             private State _state;
 
-            //private HttpMethod _method;
-            //private byte[] _path;
-            //private byte[] _query;
-            //private bool _keepAlive;
-
             public HttpConnectionContext()
             {
-                _handler = new THandler();
+                _handler = new THandlerInner();
             }
 
             public string ConnectionId { get; set; }
@@ -111,7 +108,7 @@ namespace PlatformLevelTechempower
             {
                 try
                 {
-                    var parser = new HttpParser<HttpConnectionContext<THandler>>();
+                    var parser = new HttpParser<HttpConnectionContext<THandlerInner>>();
 
                     while (true)
                     {
@@ -166,7 +163,7 @@ namespace PlatformLevelTechempower
                 }
             }
 
-            private void ParseHttpRequest(HttpParser<HttpConnectionContext<THandler>> parser, ReadableBuffer inputBuffer, out ReadCursor consumed, out ReadCursor examined)
+            private void ParseHttpRequest(HttpParser<HttpConnectionContext<THandlerInner>> parser, ReadableBuffer inputBuffer, out ReadCursor consumed, out ReadCursor examined)
             {
                 consumed = inputBuffer.Start;
                 examined = inputBuffer.End;
