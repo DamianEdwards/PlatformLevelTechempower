@@ -1,7 +1,6 @@
 ﻿using System.Text;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http;
-using Microsoft.AspNetCore.Server.Kestrel.Internal.System.IO.Pipelines;
 
 namespace PlatformLevelTechempower
 {
@@ -15,24 +14,24 @@ namespace PlatformLevelTechempower
             public static readonly byte[] Json = Encoding.ASCII.GetBytes("/json");
         }
 
-        public override Task ProcessAsync(HandlerContext context)
+        public override Task ProcessAsync()
         {
-            if (context.Method == HttpMethod.Get)
+            if (Method == HttpMethod.Get)
             {
-                if (PathMatch(context.Path, Paths.Plaintext))
+                if (PathMatch(Path, Paths.Plaintext))
                 {
-                    Ok(context, _plainTextBody, MediaType.TextPlain);
+                    Ok(_plainTextBody, MediaType.TextPlain);
 
                     return Task.CompletedTask;
                 }
-                else if (PathMatch(context.Path, Paths.Json))
+                else if (PathMatch(Path, Paths.Json))
                 {
-                    Json(context, new { message = "Hello, World!" });
+                    Json(new { message = "Hello, World!" });
                     return Task.CompletedTask;
                 }
             }
 
-            NotFound(context);
+            NotFound();
             return Task.CompletedTask;
         }
     }
