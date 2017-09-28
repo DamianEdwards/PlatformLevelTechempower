@@ -192,8 +192,14 @@ namespace PlatformLevelTechempower
             public void OnStartLine(HttpMethod method, HttpVersion version, Span<byte> target, Span<byte> path, Span<byte> query, Span<byte> customMethod, bool pathEncoded)
             {
                 _handler.Method = method;
-                _handler.Path = path.ToArray();
-                _handler.Query = query.ToArray();
+
+                Array.Clear(_handler.Path, 0, _handler.Path.Length);
+                path.CopyTo(_handler.Path);
+                _handler.PathLength = path.Length;
+
+                Array.Clear(_handler.Query, 0, _handler.Query.Length);
+                query.CopyTo(_handler.Query);
+                _handler.QueryLength = query.Length;
             }
 
             public void OnHeader(Span<byte> name, Span<byte> value)
@@ -245,8 +251,7 @@ namespace PlatformLevelTechempower
         private static readonly byte[] _crlf = Encoding.ASCII.GetBytes("\r\n");
         private static readonly byte[] _http11StartLine = Encoding.ASCII.GetBytes("HTTP/1.1 ");
 
-        private static readonly byte[] _headerServer = Encoding.ASCII.GetBytes("Server: Custom");
-        private static readonly byte[] _headerDate = Encoding.ASCII.GetBytes("Date: ");
+        private static readonly byte[] _headerServer = Encoding.ASCII.GetBytes("Server: Kestrel");
         private static readonly byte[] _headerContentLength = Encoding.ASCII.GetBytes("Content-Length: ");
         private static readonly byte[] _headerContentType = Encoding.ASCII.GetBytes("Content-Type: ");
         private static readonly byte[] _headerContentLengthZero = Encoding.ASCII.GetBytes("0");
@@ -256,9 +261,13 @@ namespace PlatformLevelTechempower
 
         public HttpMethod Method { get; set; }
 
-        public byte[] Path { get; set; }
+        public byte[] Path { get; set; } = new byte[256];
 
-        public byte[] Query { get; set; }
+        public int PathLength { get; set; }
+
+        public byte[] Query { get; set; } = new byte[256];
+
+        public int QueryLength { get; set; }
 
         public bool KeepAlive { get; set; }
 
@@ -273,7 +282,8 @@ namespace PlatformLevelTechempower
 
         public bool PathMatch(byte[] path, byte[] target)
         {
-            return path.SequenceEqual(target);
+            var pathSpan = path.AsSpan().Slice(0, PathLength);
+            return pathSpan.SequenceEqual(target);
         }
 
         public void Ok(byte[] body, MediaType mediaType)
