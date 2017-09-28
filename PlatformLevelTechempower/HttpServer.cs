@@ -147,7 +147,9 @@ namespace PlatformLevelTechempower
 
                                 var writer = new WritableBufferWriter(outputBuffer);
 
-                                await _handler.ProcessAsync(_method, _path, _query, _keepAlive, writer);
+                                var context = new HandlerContext(_method, _path, _query, _keepAlive, writer);
+
+                                await _handler.ProcessAsync(context);
 
                                 await outputBuffer.FlushAsync();
 
@@ -246,6 +248,24 @@ namespace PlatformLevelTechempower
         }
     }
 
+    public struct HandlerContext
+    {
+        public HandlerContext(HttpMethod method, byte[] path, byte[] query, bool keepAlive, WritableBufferWriter output)
+        {
+            Method = method;
+            Path = path;
+            Query = query;
+            KeepAlive = keepAlive;
+            Output = output;
+        }
+
+        public HttpMethod Method { get; set; }
+        public byte[] Path { get; set; }
+        public byte[] Query { get; set; }
+        public bool KeepAlive { get; set; }
+        public WritableBufferWriter Output { get; set; }
+    }
+
     public abstract class Handler
     {
         private static readonly byte[] _crlf = Encoding.ASCII.GetBytes("\r\n");
@@ -265,88 +285,94 @@ namespace PlatformLevelTechempower
 
         }
 
-        public abstract Task ProcessAsync(HttpMethod method, byte[] path, byte[] query, bool keepAlive, WritableBufferWriter output);
+        public abstract Task ProcessAsync(HandlerContext context);
 
         public bool PathMatch(byte[] path, byte[] target)
         {
             return path.SequenceEqual(target);
         }
 
-        public void Ok(WritableBufferWriter output, bool keepAlive, byte[] body, MediaType mediaType)
+        public void Ok(HandlerContext context, byte[] body, MediaType mediaType)
         {
-            WriteStartLine(output, HttpStatus.Ok);
+            WriteStartLine(context, HttpStatus.Ok);
 
-            WriteCommonHeaders(output, keepAlive);
+            WriteCommonHeaders(context);
 
-            WriteHeader(output, _headerContentType, mediaType.Value);
-            WriteHeader(output, _headerContentLength, Encoding.ASCII.GetBytes(HeaderUtilities.FormatNonNegativeInt64(body.Length)));
+            WriteHeader(context, _headerContentType, mediaType.Value);
+            WriteHeader(context, _headerContentLength, (ulong)body.Length);
 
-            output.Write(_crlf);
-            output.Write(body);
+            context.Output.Write(_crlf);
+            context.Output.Write(body);
         }
 
-        public void Json<T>(WritableBufferWriter output, bool keepAlive, T value)
+        public void Json<T>(HandlerContext context, T value)
         {
-            WriteStartLine(output, HttpStatus.Ok);
+            var output = context.Output;
 
-            WriteCommonHeaders(output, keepAlive);
+            WriteStartLine(context, HttpStatus.Ok);
 
-            WriteHeader(output, _headerContentType, MediaType.ApplicationJson.Value);
+            WriteCommonHeaders(context);
+
+            WriteHeader(context, _headerContentType, MediaType.ApplicationJson.Value);
 
             var body = JsonSerializer.Serialize(value);
 
-            WriteHeader(output, _headerContentLength, (ulong)body.Length);
+            WriteHeader(context, _headerContentLength, (ulong)body.Length);
 
             output.Write(_crlf);
             output.Write(body);
         }
 
-        public HttpStatus NotFound(WritableBufferWriter output, bool keepAlive)
+        public void NotFound(HandlerContext context)
         {
-            return WriteResponse(output, keepAlive, HttpStatus.NotFound);
+            WriteResponse(context, HttpStatus.NotFound);
         }
 
-        public HttpStatus BadRequest(WritableBufferWriter output, bool keepAlive)
+        public void BadRequest(HandlerContext context)
         {
-            return WriteResponse(output, keepAlive, HttpStatus.BadRequest);
+            WriteResponse(context, HttpStatus.BadRequest);
         }
 
-        public void WriteHeader(WritableBufferWriter output, byte[] name, ulong value)
+        public void WriteHeader(HandlerContext context, byte[] name, ulong value)
         {
+            var output = context.Output;
             output.Write(name);
             PipelineExtensions.WriteNumeric(ref output, value);
             output.Write(_crlf);
         }
 
-        public void WriteHeader(WritableBufferWriter output, byte[] name, byte[] value)
+        public void WriteHeader(HandlerContext context, byte[] name, byte[] value)
         {
+            var output = context.Output;
+
             output.Write(name);
             output.Write(value);
             output.Write(_crlf);
         }
 
-        private HttpStatus WriteResponse(WritableBufferWriter output, bool keepAlive, HttpStatus status)
+        private void WriteResponse(HandlerContext context, HttpStatus status)
         {
-            WriteStartLine(output, status);
+            var output = context.Output;
 
-            WriteCommonHeaders(output, keepAlive);
-
-            WriteHeader(output, _headerContentLength, _headerContentLengthZero);
-
+            WriteStartLine(context, status);
+            WriteCommonHeaders(context);
+            WriteHeader(context, _headerContentLength, 0);
             output.Write(_crlf);
-
-            return status;
         }
 
-        private static void WriteStartLine(WritableBufferWriter output, HttpStatus status)
+        private static void WriteStartLine(HandlerContext context, HttpStatus status)
         {
+            var output = context.Output;
+
             output.Write(_http11StartLine);
             output.Write(status.Value);
             output.Write(_crlf);
         }
 
-        private void WriteCommonHeaders(WritableBufferWriter output, bool keepAlive)
+        private void WriteCommonHeaders(HandlerContext context)
         {
+            var output = context.Output;
+
             // Server headers
             output.Write(_headerServer);
 
@@ -354,7 +380,7 @@ namespace PlatformLevelTechempower
             output.Write(_dateHeaderValueManager.GetDateHeaderValues().Bytes);
             output.Write(_crlf);
 
-            if (keepAlive)
+            if (context.KeepAlive)
             {
                 output.Write(_headerConnectionKeepAlive);
                 output.Write(_crlf);

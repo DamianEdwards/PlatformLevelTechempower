@@ -15,24 +15,25 @@ namespace PlatformLevelTechempower
             public static readonly byte[] Json = Encoding.ASCII.GetBytes("/json");
         }
 
-        public override Task ProcessAsync(HttpMethod method, byte[] path, byte[] query, bool keepAlive, WritableBufferWriter output)
+        public override Task ProcessAsync(HandlerContext context)
         {
-            if (method == HttpMethod.Get)
+            if (context.Method == HttpMethod.Get)
             {
-                if (PathMatch(path, Paths.Plaintext))
+                if (PathMatch(context.Path, Paths.Plaintext))
                 {
-                    Ok(output, keepAlive, _plainTextBody, MediaType.TextPlain);
+                    Ok(context, _plainTextBody, MediaType.TextPlain);
 
                     return Task.CompletedTask;
                 }
-                else if (PathMatch(path, Paths.Json))
+                else if (PathMatch(context.Path, Paths.Json))
                 {
-                    Json(output, keepAlive, new { message = "Hello, World!" });
+                    Json(context, new { message = "Hello, World!" });
                     return Task.CompletedTask;
                 }
             }
 
-            return Task.FromResult(NotFound(output, keepAlive));
+            NotFound(context);
+            return Task.CompletedTask;
         }
     }
 }
