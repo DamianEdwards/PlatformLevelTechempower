@@ -25,7 +25,7 @@ namespace PlatformLevelTechempower
             //return app.RunAsync(parsedArgs.Port);
 
             var server = new HttpServer(new BenchmarkHandler());
-            return server.RunAsync(parsedArgs.Port);
+            return server.RunAsync(parsedArgs.Port, parsedArgs.ThreadCount);
         }
     }
 }

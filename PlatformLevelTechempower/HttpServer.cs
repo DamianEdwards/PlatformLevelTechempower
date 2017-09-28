@@ -30,13 +30,18 @@ namespace PlatformLevelTechempower
             _handler = handler;
         }
 
-        public async Task RunAsync(int port)
+        public static readonly int DefaultThreadCount = Environment.ProcessorCount;
+
+        public Task RunAsync(int port) => RunAsync(port, DefaultThreadCount);
+
+        public async Task RunAsync(int port, int threadCount)
         {
             var lifetime = new ApplicationLifetime(NullLoggerFactory.Instance.CreateLogger<ApplicationLifetime>());
 
             Console.CancelKeyPress += (sender, e) => lifetime.StopApplication();
 
             var libuvOptions = new LibuvTransportOptions();
+
             var libuvTransport = new LibuvTransportFactory(
                 Options.Create(libuvOptions),
                 lifetime,
@@ -140,7 +145,9 @@ namespace PlatformLevelTechempower
                             {
                                 var outputBuffer = Output.Writer.Alloc();
 
-                                var status = await _handler.ProcessAsync(_method, _path, _query, _keepAlive, outputBuffer);
+                                var writer = new WritableBufferWriter(outputBuffer);
+
+                                await _handler.ProcessAsync(_method, _path, _query, _keepAlive, writer);
 
                                 await outputBuffer.FlushAsync();
 
@@ -258,14 +265,14 @@ namespace PlatformLevelTechempower
 
         }
 
-        public abstract Task<HttpStatus> ProcessAsync(HttpMethod method, byte[] path, byte[] query, bool keepAlive, WritableBuffer output);
+        public abstract Task ProcessAsync(HttpMethod method, byte[] path, byte[] query, bool keepAlive, WritableBufferWriter output);
 
         public bool PathMatch(byte[] path, byte[] target)
         {
             return path.SequenceEqual(target);
         }
 
-        public HttpStatus Ok(WritableBuffer output, bool keepAlive, byte[] body, MediaType mediaType)
+        public void Ok(WritableBufferWriter output, bool keepAlive, byte[] body, MediaType mediaType)
         {
             WriteStartLine(output, HttpStatus.Ok);
 
@@ -276,11 +283,9 @@ namespace PlatformLevelTechempower
 
             output.Write(_crlf);
             output.Write(body);
-
-            return HttpStatus.Ok;
         }
 
-        public HttpStatus Json<T>(WritableBuffer output, bool keepAlive, T value)
+        public void Json<T>(WritableBufferWriter output, bool keepAlive, T value)
         {
             WriteStartLine(output, HttpStatus.Ok);
 
@@ -290,33 +295,37 @@ namespace PlatformLevelTechempower
 
             var body = JsonSerializer.Serialize(value);
 
-            // PERF: Need faster way to convert int to ASCII string bytes
-            WriteHeader(output, _headerContentLength, Encoding.ASCII.GetBytes(HeaderUtilities.FormatNonNegativeInt64(body.Length)));
+            WriteHeader(output, _headerContentLength, (ulong)body.Length);
 
             output.Write(_crlf);
             output.Write(body);
-
-            return HttpStatus.Ok;
         }
 
-        public HttpStatus NotFound(WritableBuffer output, bool keepAlive)
+        public HttpStatus NotFound(WritableBufferWriter output, bool keepAlive)
         {
             return WriteResponse(output, keepAlive, HttpStatus.NotFound);
         }
 
-        public HttpStatus BadRequest(WritableBuffer output, bool keepAlive)
+        public HttpStatus BadRequest(WritableBufferWriter output, bool keepAlive)
         {
             return WriteResponse(output, keepAlive, HttpStatus.BadRequest);
         }
 
-        public void WriteHeader(WritableBuffer output, byte[] name, byte[] value)
+        public void WriteHeader(WritableBufferWriter output, byte[] name, ulong value)
+        {
+            output.Write(name);
+            PipelineExtensions.WriteNumeric(ref output, value);
+            output.Write(_crlf);
+        }
+
+        public void WriteHeader(WritableBufferWriter output, byte[] name, byte[] value)
         {
             output.Write(name);
             output.Write(value);
             output.Write(_crlf);
         }
 
-        private HttpStatus WriteResponse(WritableBuffer output, bool keepAlive, HttpStatus status)
+        private HttpStatus WriteResponse(WritableBufferWriter output, bool keepAlive, HttpStatus status)
         {
             WriteStartLine(output, status);
 
@@ -329,14 +338,14 @@ namespace PlatformLevelTechempower
             return status;
         }
 
-        private static void WriteStartLine(WritableBuffer output, HttpStatus status)
+        private static void WriteStartLine(WritableBufferWriter output, HttpStatus status)
         {
             output.Write(_http11StartLine);
             output.Write(status.Value);
             output.Write(_crlf);
         }
 
-        private void WriteCommonHeaders(WritableBuffer output, bool keepAlive)
+        private void WriteCommonHeaders(WritableBufferWriter output, bool keepAlive)
         {
             // Server headers
             output.Write(_headerServer);
